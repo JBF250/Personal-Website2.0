@@ -12,6 +12,37 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   },
 })
 
+/**
+ * 冷启动预热。
+ *
+ * Supabase 免费版实例空闲一段时间后实例会休眠，此时首批请求容易超时失败，
+ * 表现为博客加载不出来、登录报错，过几分钟才恢复。
+ * 在进入网站的第一时间发一个轻量的真实查询，可以提前唤醒实例并建立连接；
+ * 这个请求同时会产出数据库活动记录，避免项目因长期无活动被自动暂停。
+ */
+let warmUpStarted = false
+
+export function warmUpSupabase(): void {
+  if (warmUpStarted) return
+  warmUpStarted = true
+
+  const ping = async (attempt: number): Promise<void> => {
+    try {
+      const { error } = await supabase.from('game_leaderboard').select('id').limit(1)
+      if (error) throw error
+    } catch {
+      // 冷启动可能持续数十秒，失败后退避重试，覆盖更长的唤醒时间
+      if (attempt < 2) {
+        window.setTimeout(() => {
+          void ping(attempt + 1)
+        }, 2500)
+      }
+    }
+  }
+
+  void ping(0)
+}
+
 export type User = {
   id: string
   username: string

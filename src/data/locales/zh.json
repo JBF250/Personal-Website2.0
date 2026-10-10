@@ -82,6 +82,7 @@
     "registerFailed": "注册失败，请稍后重试",
     "emailNotVerified": "请先验证邮箱后再登录",
     "loginFailed": "邮箱或密码错误",
+    "networkError": "网络连接异常，请稍后重试",
     "forgotPassword": "忘记密码？",
     "emailAlreadyRegistered": "该邮箱已被注册，请直接登录",
     "loggingIn": "登录中...",

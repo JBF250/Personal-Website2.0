@@ -82,6 +82,7 @@
     "registerFailed": "登録に失敗しました、後でもう一度お試しください",
     "emailNotVerified": "ログイン前にメールアドレスを認証してください",
     "loginFailed": "メールアドレスまたはパスワードが正しくありません",
+    "networkError": "ネットワークエラーです。しばらくしてから再試行してください",
     "forgotPassword": "パスワードを忘れましたか？",
     "emailAlreadyRegistered": "このメールアドレスは既に登録されています。ログインしてください",
     "loggingIn": "ログイン中...",

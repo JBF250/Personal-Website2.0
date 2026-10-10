@@ -23,14 +23,17 @@ export default function Login() {
       await login(email, password)
       navigate('/')
     } catch (err: any) {
-      const errMsg = err?.message || ''
-      // Supabase 未验证邮箱的错误
-      if (errMsg.toLowerCase().includes('email not confirmed')) {
+      const errMsg = (err?.message || '').toLowerCase()
+      if (errMsg.includes('email not confirmed')) {
         setError(t('auth.emailNotVerified'))
-      } else if (errMsg.toLowerCase().includes('rate limit')) {
+      } else if (errMsg.includes('rate limit')) {
         setError(t('auth.rateLimit'))
-      } else {
+      } else if (errMsg.includes('invalid login credentials') || errMsg.includes('invalid_grant')) {
+        // 只有明确的凭据错误才是账号或密码不对
         setError(t('auth.loginFailed'))
+      } else {
+        // 网络超时、实例冷启动等异常不能误报成密码错误，否则用户会反复重输密码
+        setError(t('auth.networkError'))
       }
     } finally {
       setLoading(false)

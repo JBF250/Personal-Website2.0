@@ -82,6 +82,7 @@
     "registerFailed": "Registration failed, please try again later",
     "emailNotVerified": "Please verify your email before logging in",
     "loginFailed": "Invalid email or password",
+    "networkError": "Network error, please try again later",
     "forgotPassword": "Forgot password?",
     "emailAlreadyRegistered": "This email is already registered, please login instead",
     "loggingIn": "Logging in...",
