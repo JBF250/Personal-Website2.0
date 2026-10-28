@@ -40,42 +40,14 @@ export default function TiltedCard({
 
   const [lastY, setLastY] = useState(0);
 
-  // 图片加载动画：骨架图 + 中央圆形进度环，加载完成后渐入图片
-  const loadedRef = useRef(false);
+  // 图片加载：骨架图 + 中央旋转环。
+  // 图片始终交给浏览器原生 <img> 加载——这样能复用 HTTP 缓存、支持断点重连，
+  // 也不会因为额外的 fetch/Blob 环节失败而把本来正常的图片变成损坏图。
+  // 加载期间只显示不确定态旋转环，不伪造百分比进度。
   const [imgLoaded, setImgLoaded] = useState(false);
-  const [progress, setProgress] = useState(0);
 
   useEffect(() => {
-    loadedRef.current = false;
     setImgLoaded(false);
-    setProgress(0);
-
-    const img = new Image();
-    img.src = imageSrc;
-    img.onload = () => {
-      loadedRef.current = true;
-      setProgress(100);
-      setImgLoaded(true);
-    };
-    if (img.complete) {
-      loadedRef.current = true;
-      setProgress(100);
-      setImgLoaded(true);
-    }
-
-    // 图片未就绪时，用缓动动画模拟 0→100 的进度
-    const ease = (p) => 1 - Math.pow(1 - p, 3);
-    const duration = 1400;
-    const t0 = performance.now();
-    let raf = 0;
-    const tick = (now) => {
-      if (loadedRef.current) return;
-      const t = Math.min((now - t0) / duration, 1);
-      setProgress(Math.min(ease(t) * 100, 99));
-      if (t < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
   }, [imageSrc]);
 
   const ringRadius = 21;
@@ -145,6 +117,9 @@ export default function TiltedCard({
           src={imageSrc}
           alt={altText}
           className="tilted-card-img"
+          onLoad={() => setImgLoaded(true)}
+          // 真正加载失败时也要撤掉骨架，否则会一直转圈挡住错误状态
+          onError={() => setImgLoaded(true)}
           style={{
             width: imageWidth,
             height: imageHeight,
@@ -161,7 +136,7 @@ export default function TiltedCard({
           >
             <span className="skeleton-shimmer" />
             <svg
-              className="tilted-loader-ring"
+              className="tilted-loader-ring lazy-ring-rotate"
               viewBox="0 0 48 48"
               width="56"
               height="56"
@@ -182,12 +157,11 @@ export default function TiltedCard({
                 stroke="#22d3ee"
                 strokeWidth="4"
                 strokeLinecap="round"
-                strokeDasharray={ringLength}
-                strokeDashoffset={ringLength * (1 - progress / 100)}
+                strokeDasharray={`calc(0.45 * ${ringLength}) ${ringLength}`}
+                strokeDashoffset={ringLength * 0.75}
                 transform="rotate(-90 24 24)"
               />
             </svg>
-            <span className="tilted-loader-text">{Math.round(progress)}%</span>
           </div>
         )}
 

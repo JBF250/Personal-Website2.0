@@ -52,7 +52,9 @@
     "confirmDeleteComment": "このコメントを削除してもよろしいですか？",
     "submit": "送信",
     "update": "更新",
-    "cancel": "キャンセル"
+    "cancel": "キャンセル",
+    "loadFailed": "読み込みに失敗しました。ネットワークを確認して再試行してください",
+    "retry": "再試行"
   },
   "auth": {
     "login": "ログイン",

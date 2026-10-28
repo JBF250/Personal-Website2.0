@@ -21,10 +21,16 @@ const LOCAL_CORE_BASE = '/ffmpeg-mt'
 let localCoreManifest: Record<string, { size: number; parts: number }> | null = null
 async function loadLocalCoreManifest(): Promise<Record<string, { size: number; parts: number }>> {
   if (localCoreManifest) return localCoreManifest
-  const resp = await fetch(`${LOCAL_CORE_BASE}/manifest.json`)
-  if (!resp.ok) throw new Error(`本地核心清单不可用 (HTTP ${resp.status})`)
-  localCoreManifest = (await resp.json()) as Record<string, { size: number; parts: number }>
-  return localCoreManifest
+  const ac = new AbortController()
+  const timer = window.setTimeout(() => ac.abort(), 10000)
+  try {
+    const resp = await fetch(`${LOCAL_CORE_BASE}/manifest.json`, { signal: ac.signal })
+    if (!resp.ok) throw new Error(`本地核心清单不可用 (HTTP ${resp.status})`)
+    localCoreManifest = (await resp.json()) as Record<string, { size: number; parts: number }>
+    return localCoreManifest
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // [文件名, MIME, 加载进度区间起点, 终点]：加载阶段占 2%~45%，转换阶段占 45%~100%
@@ -39,6 +45,63 @@ const ST_FILES: [string, string, number, number][] = [
 ]
 
 type CoreProgress = (pct: number, msg?: string) => void
+
+// 同源分片下载的空闲超时与重试次数。
+// 没有超时保护时，一旦连接被中间网络挂起就会一直停在某个百分比（用户侧表现为卡半小时）。
+const LOCAL_IDLE_TIMEOUT = 15000
+const LOCAL_MAX_ATTEMPTS = 3
+
+async function fetchCorePart(url: string, onBytes: (n: number) => void): Promise<Uint8Array> {
+  let lastErr: any
+  for (let attempt = 1; attempt <= LOCAL_MAX_ATTEMPTS; attempt++) {
+    const ac = new AbortController()
+    let idleTimer: number | undefined
+    const resetIdle = () => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer)
+      idleTimer = window.setTimeout(() => ac.abort(), LOCAL_IDLE_TIMEOUT)
+    }
+    resetIdle()
+    try {
+      const resp = await fetch(url, { signal: ac.signal })
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+
+      const reader = resp.body?.getReader()
+      if (!reader) {
+        const buf = new Uint8Array(await resp.arrayBuffer())
+        onBytes(buf.byteLength)
+        return buf
+      }
+
+      const chunks: Uint8Array[] = []
+      let total = 0
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value?.length) {
+          chunks.push(value)
+          total += value.length
+          onBytes(total)
+          resetIdle()
+        }
+      }
+      const merged = new Uint8Array(total)
+      let offset = 0
+      for (const c of chunks) {
+        merged.set(c, offset)
+        offset += c.length
+      }
+      return merged
+    } catch (e) {
+      lastErr = e
+      if (attempt < LOCAL_MAX_ATTEMPTS) {
+        await new Promise((r) => window.setTimeout(r, 800 * attempt))
+      }
+    } finally {
+      if (idleTimer !== undefined) clearTimeout(idleTimer)
+    }
+  }
+  throw lastErr
+}
 
 // 同源核心的字节只取一次：后台预载与点击转换共用同一个 Promise，
 // 结果（blob URL）缓存在这里，避免重复下载。失败时清空以便下次重试。
@@ -59,9 +122,10 @@ function loadLocalCoreAssets(onProgress?: CoreProgress) {
       const chunks: Uint8Array[] = []
       let done = 0
       for (const part of parts) {
-        const resp = await fetch(`${LOCAL_CORE_BASE}/${part}`)
-        if (!resp.ok) throw new Error(`读取 ${part} 失败 (HTTP ${resp.status})`)
-        const buf = new Uint8Array(await resp.arrayBuffer())
+        const buf = await fetchCorePart(`${LOCAL_CORE_BASE}/${part}`, (n) => {
+          const current = done + n
+          localCoreProgress?.(Math.max(from, Math.min(to, Math.round(from + (current / info.size) * (to - from)))))
+        })
         chunks.push(buf)
         done += buf.byteLength
         localCoreProgress?.(Math.max(from, Math.min(to, Math.round(from + (done / info.size) * (to - from)))))

@@ -4,8 +4,8 @@
             "id": "game-1",
             "title": {
                 "zh": "离去之后",
-                "en": "After Leaving",
-                "ja": "去りし後"
+                "en": "Vestige of Leaving",
+                "ja": "離れた跡"
             },
             "description": {
                 "zh": "一场披着俗套勇者外皮的冒险故事，却是感动人心的双向救赎。",
@@ -15,7 +15,7 @@
             "fullDescription": {
                 "zh": "未来的某一天，沉浸式人工智能心理医疗程序推出了，一个生活失意的年轻人，是如何在这个构想的勇者世界中找寻到了新的自我，完成一次救赎之旅。\n\n这是我独立开发的第一款游戏，你将扮演一位踏上旅途的勇者，在看似俗套的王道剧情背后，隐藏着一段关于告别与成长的深刻故事。游戏融合了经典的JRPG战斗系统与创新的叙事手法，每一个选择都将影响故事的走向。你将在这场旅途中遇到形形色色的角色，与他们建立羁绊，最终发现所谓的「离去」并非结束，而是另一种形式的开始。\n\n如果你喜欢的话，可以联系我获取游戏测试版文件，等到一切都做的差不多时，我也会让其在steam发售。",
                 "en": "In the future, an immersive AI psychological therapy program was launched. A young man living a disappointing life found a new self in this constructed hero's world and completed a journey of redemption.\n\nThis is the first game I independently developed. You play as a hero embarking on a journey. Behind the seemingly clichéd heroic storyline lies a profound tale of farewell and growth. The game combines a classic JRPG battle system with innovative narrative techniques, where every choice shapes the story. You will meet diverse characters along the way, forge bonds with them, and ultimately discover that 'leaving' is not an end, but another form of beginning.\n\nIf you like it, you can contact me to get the game beta test files. When everything is nearly complete, I will also release it on Steam.",
-                "ja": "未来のある日、没入型AI心理療法プログラムが発売された。失意の若者が、この空想の勇者世界の中で新しい自分を見つけ、救済の旅を完了する物語である。\n\nこれは私が独立開発した初めてのゲームです。旅に出る勇者を演じ、陳腐に見える王道ストーリーの背後には、別れと成長に関する深い物語が隠されています。ゲームはクラシックなJRPGバトルシステムと革新的な叙事手法を融合し、全ての選択がストーリーの行方に影響を与えます。旅の途中で様々なキャラクターに出会い、絆を深め、最終的に「去りし後」が終わりではなく、別の形の始まりであることを発見するでしょう。\n\nもし気に入ったら、ゲームのベータ版ファイルを入手するために連絡してください。すべてがほぼ完成したら、Steamでも発売する予定です。"
+                "ja": "未来のある日、没入型AI心理療法プログラムが発売された。失意の若者が、この空想の勇者世界の中で新しい自分を見つけ、救済の旅を完了する物語である。\n\nこれは私が独立開発した初めてのゲームです。旅に出る勇者を演じ、陳腐に見える王道ストーリーの背後には、別れと成長に関する深い物語が隠されています。ゲームはクラシックなJRPGバトルシステムと革新的な叙事手法を融合し、全ての選択がストーリーの行方に影響を与えます。旅の途中で様々なキャラクターに出会い、絆を深め、最終的に「離れた跡」が終わりではなく、別の形の始まりであることを発見するでしょう。\n\nもし気に入ったら、ゲームのベータ版ファイルを入手するために連絡してください。すべてがほぼ完成したら、Steamでも発売する予定です。"
             },
             "tech": ["RPGMV", "JavaScript", "JRPG"],
             "status": "completed",

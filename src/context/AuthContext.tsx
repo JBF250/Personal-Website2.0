@@ -122,7 +122,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const login = async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    // Supabase 实例冷启动时登录请求可能长时间无响应，加超时避免按钮一直转圈
+    const timeout = new Promise<never>((_, reject) =>
+      window.setTimeout(() => reject(new Error('request-timeout')), 30000)
+    )
+
+    const { data, error } = await Promise.race([
+      supabase.auth.signInWithPassword({ email, password }),
+      timeout,
+    ])
     
     if (error) throw error
     

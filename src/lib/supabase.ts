@@ -28,8 +28,14 @@ export function warmUpSupabase(): void {
 
   const ping = async (attempt: number): Promise<void> => {
     try {
-      const { error } = await supabase.from('game_leaderboard').select('id').limit(1)
-      if (error) throw error
+      // 冷启动时请求可能长时间无响应，加超时才能进入下一轮重试
+      const result = await Promise.race([
+        supabase.from('game_leaderboard').select('id').limit(1),
+        new Promise<never>((_, reject) =>
+          window.setTimeout(() => reject(new Error('warm-up timeout')), 15000)
+        ),
+      ])
+      if (result.error) throw result.error
     } catch {
       // 冷启动可能持续数十秒，失败后退避重试，覆盖更长的唤醒时间
       if (attempt < 2) {

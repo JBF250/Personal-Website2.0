@@ -3,6 +3,7 @@ import { Plus, Edit2, Trash2, Image, X, ArrowLeft, ThumbsUp, MessageCircle, User
 import { useAuth } from '@/context/AuthContext'
 import { useI18n } from '@/context/I18nContext'
 import { supabase, type CommunityPost } from '@/lib/supabase'
+import { loadCommunityPosts, invalidateCommunityPosts } from '@/lib/siteData'
 import gainianPosts from '@/lib/gainianPosts'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import Avatar from '@/components/Avatar'
@@ -22,6 +23,7 @@ export default function Blog() {
   )
   const [posts, setPosts] = useState<CommunityPostWithAuthor[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [skeletonCount, setSkeletonCount] = useState(3)
   const [postStats, setPostStats] = useState<Record<string, { likes: number; comments: number }>>({})
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -100,20 +102,14 @@ export default function Blog() {
     }
   }
 
-  const fetchCommunityPosts = async () => {
+  const fetchCommunityPosts = async (force = false) => {
     setIsLoading(true)
-    // 第一步先查询后端贴子总数，让占位卡片数量与实际贴子数量大致一致
-    const { count } = await supabase
-      .from('community_posts')
-      .select('id', { count: 'exact', head: true })
-    setSkeletonCount(count ? Math.min(Math.max(count, 1), 12) : 3)
+    setLoadError(false)
+    try {
+      // 进站预载已在后台发起，这里会复用同一请求 / 缓存，不重复拉取
+      const data = await loadCommunityPosts(force)
+      setSkeletonCount(Math.min(Math.max(data.length, 1), 12))
 
-    const { data, error } = await supabase
-      .from('community_posts')
-      .select('*')
-      .order('created_at', { ascending: false })
-    
-    if (!error && data) {
       const postsWithAuthor = data.map(post => ({
         ...post,
         author: {
@@ -122,11 +118,19 @@ export default function Blog() {
           username: post.author_display_name || 'anonymous'
         }
       }))
-      
+
       setPosts(postsWithAuthor)
-      loadPostStats(postsWithAuthor.map(p => p.id))
+      if (postsWithAuthor.length > 0) {
+        loadPostStats(postsWithAuthor.map(p => p.id))
+      }
+    } catch (error) {
+      // 之前这里静默失败，页面会显示成"没有帖子"，让人误以为是空数据
+      console.error('Failed to load community posts:', error)
+      setPosts([])
+      setLoadError(true)
+    } finally {
+      setIsLoading(false)
     }
-    setIsLoading(false)
   }
 
   const handleCreatePost = async () => {
@@ -148,7 +152,8 @@ export default function Blog() {
       setShowCreateModal(false)
       setNewPost({ title: '', content: '' })
       setPostImages([])
-      fetchCommunityPosts()
+      invalidateCommunityPosts()
+      fetchCommunityPosts(true)
     } catch (error) {
       console.error('Failed to create post:', error)
     } finally {
@@ -176,7 +181,8 @@ export default function Blog() {
       setEditingPost(null)
       setNewPost({ title: '', content: '' })
       setPostImages([])
-      fetchCommunityPosts()
+      invalidateCommunityPosts()
+      fetchCommunityPosts(true)
     } catch (error) {
       console.error('Failed to update post:', error)
     }
@@ -188,7 +194,8 @@ export default function Blog() {
     
     try {
       await supabase.from('community_posts').delete().eq('id', postId)
-      fetchCommunityPosts()
+      invalidateCommunityPosts()
+      fetchCommunityPosts(true)
     } catch (error) {
       console.error('Failed to delete post:', error)
     }
@@ -382,6 +389,16 @@ export default function Blog() {
                       {Array.from({ length: skeletonCount }).map((_, i) => (
                         <BlogCardSkeleton key={i} />
                       ))}
+                    </div>
+                  ) : loadError ? (
+                    <div className="text-center py-12">
+                      <p className="text-theme-secondary mb-4">{t('blog.loadFailed')}</p>
+                      <button
+                        onClick={() => fetchCommunityPosts(true)}
+                        className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:opacity-90 transition-opacity"
+                      >
+                        {t('blog.retry')}
+                      </button>
                     </div>
                   ) : posts.length === 0 ? (
                     <div className="text-center py-12">

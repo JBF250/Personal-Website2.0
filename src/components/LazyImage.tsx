@@ -153,6 +153,15 @@ export default function LazyImage({
             setLoaded(true)
           }}
           onError={() => {
+            // Blob 解码失败时回退到原始地址再试一次，避免整张图停在损坏状态
+            if (source !== src) {
+              if (urlRef.current) {
+                URL.revokeObjectURL(urlRef.current)
+                urlRef.current = ''
+              }
+              setSource(src)
+              return
+            }
             setError(true)
             setLoaded(true)
           }}

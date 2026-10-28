@@ -52,7 +52,9 @@
     "confirmDeleteComment": "确定删除这条评论吗？",
     "submit": "发布",
     "update": "更新",
-    "cancel": "取消"
+    "cancel": "取消",
+    "loadFailed": "加载失败，请检查网络后重试",
+    "retry": "重试"
   },
   "auth": {
     "login": "登录",

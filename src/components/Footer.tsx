@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useI18n } from '@/context/I18nContext'
+import { FULL_VERSION } from '@/generated-build'
 
 export function Footer() {
   const { t } = useI18n()
@@ -88,6 +89,7 @@ export function Footer() {
         <div className="border-t border-theme-color mt-8 pt-8 text-center">
           <p className="text-theme-secondary text-sm">
             {t('footer.copyright')}
+            <span className="ml-2 opacity-70">· {FULL_VERSION}</span>
           </p>
         </div>
       </div>
