@@ -14,20 +14,28 @@ const SUPABASE_URL = 'https://noiebpjyskscjtmdytxj.supabase.co'
 // 核心库托管地址。可用环境变量 VITE_FFMPEG_CORE_BASE 覆盖（例如换成国内 CDN /
 // Cloudflare R2）——Supabase Storage 在部分网络下对 30MB 大文件的吞吐极低。
 const CORE_BASE = import.meta.env.VITE_FFMPEG_CORE_BASE || `${SUPABASE_URL}/storage/v1/object/public/ffmpeg-core`
-// 同源核心目录：由 scripts/prepare-ffmpeg-cores.mjs 在 predev/prebuild 时生成到 public/ffmpeg-mt。
+// 同源核心目录：由 scripts/prepare-ffmpeg-cores.mjs 在 predev/prebuild 时生成到 public/。
 // 同源加载没有跨域与第三方 CDN 限速问题，是首选路径；wasm 超过 Pages 单文件上限，被切成多片。
-const LOCAL_CORE_BASE = '/ffmpeg-mt'
+// mt 需要 COOP/COEP 跨域隔离；st 不需要隔离，作为隔离不可用时的同源兜底。
+const LOCAL_CORE_BASE = { mt: '/ffmpeg-mt', st: '/ffmpeg-st' } as const
+type CoreKind = 'mt' | 'st'
 
-let localCoreManifest: Record<string, { size: number; parts: number }> | null = null
-async function loadLocalCoreManifest(): Promise<Record<string, { size: number; parts: number }>> {
-  if (localCoreManifest) return localCoreManifest
+const localCoreManifests: Record<CoreKind, Record<string, { size: number; parts: number }> | null> = {
+  mt: null,
+  st: null,
+}
+
+async function loadLocalCoreManifest(kind: CoreKind): Promise<Record<string, { size: number; parts: number }>> {
+  const cached = localCoreManifests[kind]
+  if (cached) return cached
   const ac = new AbortController()
   const timer = window.setTimeout(() => ac.abort(), 10000)
   try {
-    const resp = await fetch(`${LOCAL_CORE_BASE}/manifest.json`, { signal: ac.signal })
+    const resp = await fetch(`${LOCAL_CORE_BASE[kind]}/manifest.json`, { signal: ac.signal })
     if (!resp.ok) throw new Error(`本地核心清单不可用 (HTTP ${resp.status})`)
-    localCoreManifest = (await resp.json()) as Record<string, { size: number; parts: number }>
-    return localCoreManifest
+    const manifest = (await resp.json()) as Record<string, { size: number; parts: number }>
+    localCoreManifests[kind] = manifest
+    return manifest
   } finally {
     clearTimeout(timer)
   }
@@ -105,16 +113,21 @@ async function fetchCorePart(url: string, onBytes: (n: number) => void): Promise
 
 // 同源核心的字节只取一次：后台预载与点击转换共用同一个 Promise，
 // 结果（blob URL）缓存在这里，避免重复下载。失败时清空以便下次重试。
-let localCoreAssets: Promise<{ coreURL: string; wasmURL: string; workerURL: string }> | null = null
+type CoreAssets = { coreURL: string; wasmURL: string; workerURL?: string }
+
+const localCoreAssets: Record<CoreKind, Promise<CoreAssets> | null> = { mt: null, st: null }
 let localCoreProgress: CoreProgress | null = null
 
-function loadLocalCoreAssets(onProgress?: CoreProgress) {
+function loadLocalCoreAssets(kind: CoreKind, onProgress?: CoreProgress) {
   localCoreProgress = onProgress ?? null
-  if (localCoreAssets) return localCoreAssets
-  localCoreAssets = (async () => {
-    const manifest = await loadLocalCoreManifest()
+  const cached = localCoreAssets[kind]
+  if (cached) return cached
+
+  const promise = (async () => {
+    const manifest = await loadLocalCoreManifest(kind)
+    const files = kind === 'mt' ? MT_FILES : ST_FILES
     const urls: string[] = []
-    for (const [file, mime, from, to] of MT_FILES) {
+    for (const [file, mime, from, to] of files) {
       const info = manifest[file]
       if (!info) throw new Error(`本地核心缺少 ${file}`)
       localCoreProgress?.(from, info.parts > 1 ? `[下载] ${file} (同源, ${info.parts} 片)` : `[下载] ${file} (同源)`)
@@ -122,7 +135,7 @@ function loadLocalCoreAssets(onProgress?: CoreProgress) {
       const chunks: Uint8Array[] = []
       let done = 0
       for (const part of parts) {
-        const buf = await fetchCorePart(`${LOCAL_CORE_BASE}/${part}`, (n) => {
+        const buf = await fetchCorePart(`${LOCAL_CORE_BASE[kind]}/${part}`, (n) => {
           const current = done + n
           localCoreProgress?.(Math.max(from, Math.min(to, Math.round(from + (current / info.size) * (to - from)))))
         })
@@ -138,8 +151,10 @@ function loadLocalCoreAssets(onProgress?: CoreProgress) {
     localCoreProgress?.(45)
     return { coreURL: urls[0], wasmURL: urls[1], workerURL: urls[2] }
   })()
-  localCoreAssets.catch(() => { localCoreAssets = null })
-  return localCoreAssets
+
+  localCoreAssets[kind] = promise
+  promise.catch(() => { localCoreAssets[kind] = null })
+  return promise
 }
 
 export default function ConverterPage() {
@@ -221,21 +236,24 @@ export default function ConverterPage() {
     }
   }, [])
 
-  // 进入转换页即后台预载同源核心（约 31MB），把首次等待藏在选文件/调参数的时间里。
-  // 预载与点击转换共用同一份缓存，不会重复下载；失败静默处理（点转换时仍会走完整降级链路）。
+  // 音频相关页签才需要 ffmpeg 核心：切过去就开始预载，把等待藏在选文件/调参数的时间里。
+  // 图片转换由 Canvas 完成，完全不需要这 30MB，因此停留在图片页签时不做任何下载。
   useEffect(() => {
-    // 省流模式或非跨源隔离环境（用不到多线程核心）就不预载，避免白耗流量
     if ((navigator as any).connection?.saveData) return
-    if (typeof SharedArrayBuffer === 'undefined' || !(window as any).crossOriginIsolated) return
-    // 稍作延迟，避免用户只是路过该页面时浪费 31MB
-    const timer = window.setTimeout(() => {
-      loadLocalCoreAssets().catch(() => { /* ignore */ })
-    }, 1500)
-    return () => clearTimeout(timer)
-  }, [])
+    if (activeTab === 'image') return
 
-  // FFmpeg 单例初始化：跨源隔离可用时用「多线程核心」（音频转换/音频提取），
-  // 环境不支持或加载失败时回退单线程核心。核心文件托管在 Supabase Storage。
+    // 跨域隔离可用时用多线程，否则用同样免隔离的单线程核心；两者都走同源
+    const isolated = typeof SharedArrayBuffer !== 'undefined' && !!(window as any).crossOriginIsolated
+    const kind: CoreKind = isolated ? 'mt' : 'st'
+
+    const timer = window.setTimeout(() => {
+      loadLocalCoreAssets(kind).catch(() => { /* 点转换时会走完整降级链路 */ })
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [activeTab])
+
+  // FFmpeg 单例初始化：优先使用同源核心（mt 需要跨域隔离，st 不需要），
+  // 同源全部失败时才回退远程（Supabase）。
   const initFfmpeg = useCallback(async () => {
     if (ffmpegRef.current) return ffmpegRef.current
     try {
@@ -455,11 +473,12 @@ export default function ConverterPage() {
       }
 
       // 首选路径：同源核心。无跨域、无第三方限速，wasm 分片取回后拼成 Blob 交给 ffmpeg。
-      const loadLocal = async () => {
+      // mt 需要跨域隔离；st 不需要，因此任何环境都能走同源。
+      const loadLocal = async (kind: 'mt' | 'st') => {
         const f = build()
         try {
           // 复用（可能已由后台预载完成的）同源核心，只创建一个 FFmpeg 实例
-          const assets = await loadLocalCoreAssets((pct, msg) => {
+          const assets = await loadLocalCoreAssets(kind, (pct, msg) => {
             if (msg) addLog(msg)
             setProgress(pct)
           })
@@ -496,19 +515,32 @@ export default function ConverterPage() {
         return f
       }
 
+      // 1) 跨域隔离可用时优先同源多线程
       if (crossOriginIsolated) {
-        // 1) 同源核心（首选）
         try {
-          const mt = await loadLocal()
+          const mt = await loadLocal('mt')
           addLog('ffmpeg 多线程核心库加载完成（同源）')
           return adopt(mt)
         } catch (e: any) {
-          addLog(`同源核心不可用，改用远程加载（${String(e?.message || e).slice(0, 60)}）`)
+          addLog(`同源多线程核心不可用，改用单线程（${String(e?.message || e).slice(0, 60)}）`)
         }
-        // 2) 远程核心（Supabase），失败再回退单线程
+      }
+
+      // 2) 同源单线程：不需要跨域隔离，任何环境都可用。
+      //    放在远程回退之前，避免在跨域隔离失效时被迫从 Supabase 下载 32MB。
+      try {
+        const st = await loadLocal('st')
+        addLog('ffmpeg 单线程核心库加载完成（同源）')
+        return adopt(st)
+      } catch (e: any) {
+        addLog(`同源单线程核心不可用，改用远程加载（${String(e?.message || e).slice(0, 60)}）`)
+      }
+
+      // 3) 远程核心（Supabase）：仅在同源全部失败时使用
+      if (crossOriginIsolated) {
         try {
           const mt = await tryLoad('mt')
-          addLog('ffmpeg 多线程核心库加载完成')
+          addLog('ffmpeg 多线程核心库加载完成（远程）')
           return adopt(mt)
         } catch (e: any) {
           console.error('FFmpeg MT 初始化失败，回退单线程:', e)
@@ -517,7 +549,7 @@ export default function ConverterPage() {
       }
 
       const st = await tryLoad('st')
-      addLog('ffmpeg 核心库加载完成')
+      addLog('ffmpeg 核心库加载完成（远程）')
       return adopt(st)
     } catch (err: any) {
       console.error('FFmpeg init error:', err)
