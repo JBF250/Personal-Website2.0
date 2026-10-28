@@ -20,20 +20,26 @@ const CORE_BASE = import.meta.env.VITE_FFMPEG_CORE_BASE || `${SUPABASE_URL}/stor
 const LOCAL_CORE_BASE = { mt: '/ffmpeg-mt', st: '/ffmpeg-st' } as const
 type CoreKind = 'mt' | 'st'
 
-const localCoreManifests: Record<CoreKind, Record<string, { size: number; parts: number }> | null> = {
+type CoreFileInfo = { size: number; parts: number; chunks?: number[]; hash?: string }
+
+const localCoreManifests: Record<CoreKind, Record<string, CoreFileInfo> | null> = {
   mt: null,
   st: null,
 }
 
-async function loadLocalCoreManifest(kind: CoreKind): Promise<Record<string, { size: number; parts: number }>> {
+async function loadLocalCoreManifest(kind: CoreKind): Promise<Record<string, CoreFileInfo>> {
   const cached = localCoreManifests[kind]
   if (cached) return cached
   const ac = new AbortController()
   const timer = window.setTimeout(() => ac.abort(), 10000)
   try {
-    const resp = await fetch(`${LOCAL_CORE_BASE[kind]}/manifest.json`, { signal: ac.signal })
+    const resp = await fetch(`${LOCAL_CORE_BASE[kind]}/manifest.json`, {
+      signal: ac.signal,
+      // 清单必须拿到最新的：分片数量/大小可能随构建变化
+      cache: 'no-store',
+    })
     if (!resp.ok) throw new Error(`本地核心清单不可用 (HTTP ${resp.status})`)
-    const manifest = (await resp.json()) as Record<string, { size: number; parts: number }>
+    const manifest = (await resp.json()) as Record<string, CoreFileInfo>
     localCoreManifests[kind] = manifest
     return manifest
   } finally {
@@ -57,11 +63,35 @@ type CoreProgress = (pct: number, msg?: string) => void
 // 同源分片下载的空闲超时与重试次数。
 // 没有超时保护时，一旦连接被中间网络挂起就会一直停在某个百分比（用户侧表现为卡半小时）。
 const LOCAL_IDLE_TIMEOUT = 15000
-const LOCAL_MAX_ATTEMPTS = 3
+const LOCAL_MAX_ATTEMPTS = 6
 
-async function fetchCorePart(url: string, onBytes: (n: number) => void): Promise<Uint8Array> {
+/**
+ * 下载一个核心分片。
+ * 关键点：连接被重置时用 Range 从已接收的字节处续传，而不是从头重下。
+ * 国内访问 Cloudflare 时大文件传输经常收到 ERR_CONNECTION_RESET，
+ * 只有续传才能保证 30MB 的文件最终能拼完。
+ */
+async function fetchCorePart(
+  url: string,
+  expectedSize: number | null,
+  onBytes: (n: number) => void
+): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = []
+  let received = 0
+  let attempt = 0
   let lastErr: any
-  for (let attempt = 1; attempt <= LOCAL_MAX_ATTEMPTS; attempt++) {
+
+  const finished = () => expectedSize !== null && received >= expectedSize
+
+  while (!finished()) {
+    if (attempt >= LOCAL_MAX_ATTEMPTS) {
+      const name = url.split('/').pop()
+      throw new Error(
+        `${name} 传输中断 (${received}/${expectedSize ?? '?'} 字节)：${lastErr?.message || lastErr}`
+      )
+    }
+    attempt++
+
     const ac = new AbortController()
     let idleTimer: number | undefined
     const resetIdle = () => {
@@ -69,46 +99,67 @@ async function fetchCorePart(url: string, onBytes: (n: number) => void): Promise
       idleTimer = window.setTimeout(() => ac.abort(), LOCAL_IDLE_TIMEOUT)
     }
     resetIdle()
+
     try {
-      const resp = await fetch(url, { signal: ac.signal })
+      const headers: Record<string, string> = {}
+      // 断点续传：只请求尚未收到的部分
+      if (received > 0) headers.Range = `bytes=${received}-`
+
+      const resp = await fetch(url, {
+        headers,
+        signal: ac.signal,
+        // 避免命中"上次被截断的缓存副本"
+        cache: 'no-store',
+      })
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+
+      // 服务器不支持 Range，返回的是完整文件：丢弃已收部分重新累积
+      if (received > 0 && resp.status === 200) {
+        chunks.length = 0
+        received = 0
+      }
 
       const reader = resp.body?.getReader()
       if (!reader) {
         const buf = new Uint8Array(await resp.arrayBuffer())
-        onBytes(buf.byteLength)
-        return buf
-      }
-
-      const chunks: Uint8Array[] = []
-      let total = 0
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (value?.length) {
-          chunks.push(value)
-          total += value.length
-          onBytes(total)
-          resetIdle()
+        chunks.push(buf)
+        received += buf.byteLength
+        onBytes(received)
+      } else {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (value?.length) {
+            chunks.push(value)
+            received += value.length
+            onBytes(received)
+            resetIdle()
+            if (expectedSize !== null && received >= expectedSize) break
+          }
         }
       }
-      const merged = new Uint8Array(total)
-      let offset = 0
-      for (const c of chunks) {
-        merged.set(c, offset)
-        offset += c.length
-      }
-      return merged
+
+      // 没有预期长度（旧版 manifest）时，读到流结束即视为完成
+      if (expectedSize === null) break
     } catch (e) {
       lastErr = e
-      if (attempt < LOCAL_MAX_ATTEMPTS) {
-        await new Promise((r) => window.setTimeout(r, 800 * attempt))
+      // 已收到的字节保留在 chunks 里，下一轮从断点继续
+      if (expectedSize === null || received < expectedSize) {
+        await new Promise((r) => window.setTimeout(r, 500 * attempt))
+        continue
       }
     } finally {
       if (idleTimer !== undefined) clearTimeout(idleTimer)
     }
   }
-  throw lastErr
+
+  const merged = new Uint8Array(received)
+  let offset = 0
+  for (const c of chunks) {
+    merged.set(c, offset)
+    offset += c.length
+  }
+  return merged
 }
 
 // 同源核心的字节只取一次：后台预载与点击转换共用同一个 Promise，
@@ -134,8 +185,13 @@ function loadLocalCoreAssets(kind: CoreKind, onProgress?: CoreProgress) {
       const parts = info.parts <= 1 ? [file] : Array.from({ length: info.parts }, (_, i) => `${file}.part${i}`)
       const chunks: Uint8Array[] = []
       let done = 0
-      for (const part of parts) {
-        const buf = await fetchCorePart(`${LOCAL_CORE_BASE[kind]}/${part}`, (n) => {
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i]
+        // manifest 里记录了每片的确切字节数，用于断点续传时判断是否传完
+        const expected = info.chunks?.[i] ?? (parts.length === 1 ? info.size : null)
+        // 带内容指纹：避免命中旧的分片缓存（文件名不变但切分方式变了）
+        const version = info.hash ? `?v=${info.hash}` : ''
+        const buf = await fetchCorePart(`${LOCAL_CORE_BASE[kind]}/${part}${version}`, expected, (n) => {
           const current = done + n
           localCoreProgress?.(Math.max(from, Math.min(to, Math.round(from + (current / info.size) * (to - from)))))
         })

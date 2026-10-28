@@ -9,14 +9,17 @@
 //   ffmpeg-st/ 单线程，不需要跨域隔离，作为隔离不可用时的同源兜底。
 // 两套都在自家域名下，避免回退到第三方（Supabase）导致极慢的下载。
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
 
-// 24MiB，留出余量确保不超过 Cloudflare Pages 的 25MiB 单文件上限
-const PART_SIZE = 24 * 1024 * 1024
+// 8MiB：单请求越小越不容易在传输途中被中间网络重置（国内访问 Cloudflare
+// 时 24MB 的单连接很容易收到 ERR_CONNECTION_RESET）。
+// 配合前端的 Range 断点续传，即使中断也只补传剩余字节。
+const PART_SIZE = 8 * 1024 * 1024
 
 const TARGETS = [
   {
@@ -53,15 +56,26 @@ for (const { label, srcDir, outDir, files } of TARGETS) {
     }
     const buf = readFileSync(srcPath)
     const parts = Math.ceil(buf.byteLength / PART_SIZE)
+    const chunks = []
     if (parts <= 1) {
       writeFileSync(path.join(outDir, outName), buf)
+      chunks.push(buf.byteLength)
     } else {
       for (let i = 0; i < parts; i++) {
         const slice = buf.subarray(i * PART_SIZE, Math.min((i + 1) * PART_SIZE, buf.byteLength))
         writeFileSync(path.join(outDir, `${outName}.part${i}`), slice)
+        chunks.push(slice.byteLength)
       }
     }
-    manifest[outName] = { size: buf.byteLength, parts }
+    manifest[outName] = {
+      size: buf.byteLength,
+      parts,
+      chunks,
+      // 内容指纹：前端用它做分片 URL 的版本参数。
+      // 分片策略改变时文件名不变（如 part0 从 24MB 变 8MB），
+      // 没有这个参数就会命中 CDN / 浏览器里旧的分片缓存，导致拼装出错。
+      hash: createHash('sha1').update(buf).digest('hex').slice(0, 12),
+    }
     console.log(
       `[准备核心] ${label} ${outName} -> ${parts} 片, 共 ${(buf.byteLength / 1024 / 1024).toFixed(1)}MB`
     )

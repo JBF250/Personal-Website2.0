@@ -4,7 +4,7 @@
   "version": "2.9.0",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/prepare-ffmpeg-cores.mjs",
+    "predev": "node scripts/prepare-ffmpeg-cores.mjs && node scripts/bump-build.mjs",
     "dev": "vite",
     "prebuild": "node scripts/prepare-ffmpeg-cores.mjs && node scripts/bump-build.mjs",
     "build": "tsc && vite build",
