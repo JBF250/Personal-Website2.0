@@ -16,7 +16,14 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const version = String(pkg.version || '0.0.0')
 const shortVersion = version.split('.').slice(0, 2).join('.')
 
-const previous = existsSync(counterFile) ? Number(readFileSync(counterFile, 'utf8').trim()) || 0 : 0
+let previous = 0
+if (existsSync(counterFile)) {
+  previous = Number(readFileSync(counterFile, 'utf8').trim()) || 0
+} else if (existsSync(outFile)) {
+  // .build-count 丢失时（例如只提交了生成文件）从已有版本号恢复，避免归零
+  const m = readFileSync(outFile, 'utf8').match(/BUILD_NUMBER\s*=\s*(\d+)/)
+  if (m) previous = Number(m[1]) || 0
+}
 const bump = process.argv.includes('--bump')
 const build = bump ? previous + 1 : previous
 

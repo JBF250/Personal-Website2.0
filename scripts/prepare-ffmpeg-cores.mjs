@@ -16,10 +16,10 @@ import path from 'node:path'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
 
-// 8MiB：单请求越小越不容易在传输途中被中间网络重置（国内访问 Cloudflare
-// 时 24MB 的单连接很容易收到 ERR_CONNECTION_RESET）。
+// 4MiB：单请求越小越不容易在传输途中被中间网络重置（国内访问 Cloudflare
+// 时大文件单连接很容易收到 ERR_CONNECTION_RESET）。
 // 配合前端的 Range 断点续传，即使中断也只补传剩余字节。
-const PART_SIZE = 8 * 1024 * 1024
+const PART_SIZE = 4 * 1024 * 1024
 
 const TARGETS = [
   {

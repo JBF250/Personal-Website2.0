@@ -2,6 +2,14 @@ node_modules/
 dist/
 .vite/
 
-# FFmpeg MT 核心文件（仅本地开发/上传暂存用，生产走 Supabase Storage）
+# 编辑器 / 工具生成的本地文件
+.trae/
+.vscode/
+.agents/
+.trae-html-share-packages/
+desktop.ini
+
+# FFmpeg 核心文件（构建时由 scripts/prepare-ffmpeg-cores.mjs 生成，不进仓库）
 public/ffmpeg-mt/
+public/ffmpeg-st/
 ffmpeg-core-upload/

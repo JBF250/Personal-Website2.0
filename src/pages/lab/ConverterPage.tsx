@@ -64,6 +64,8 @@ type CoreProgress = (pct: number, msg?: string) => void
 // 没有超时保护时，一旦连接被中间网络挂起就会一直停在某个百分比（用户侧表现为卡半小时）。
 const LOCAL_IDLE_TIMEOUT = 15000
 const LOCAL_MAX_ATTEMPTS = 6
+// 只要每次重试还能推进，就允许一直续传下去；这个总时长只是避免无限挂起
+const LOCAL_MAX_TOTAL_TIME = 10 * 60 * 1000
 
 /**
  * 下载一个核心分片。
@@ -79,12 +81,21 @@ async function fetchCorePart(
   const chunks: Uint8Array[] = []
   let received = 0
   let attempt = 0
+  let bestReceived = 0
   let lastErr: any
+  const deadline = Date.now() + LOCAL_MAX_TOTAL_TIME
 
   const finished = () => expectedSize !== null && received >= expectedSize
 
   while (!finished()) {
-    if (attempt >= LOCAL_MAX_ATTEMPTS) {
+    // 这一轮比历史最好成绩有进展 → 重置失败计数。
+    // 网络反复重置但每次都能往前推时，可以一直续传直到传完。
+    if (received > bestReceived) {
+      bestReceived = received
+      attempt = 0
+    }
+
+    if (attempt >= LOCAL_MAX_ATTEMPTS || Date.now() > deadline) {
       const name = url.split('/').pop()
       throw new Error(
         `${name} 传输中断 (${received}/${expectedSize ?? '?'} 字节)：${lastErr?.message || lastErr}`
@@ -113,29 +124,39 @@ async function fetchCorePart(
       })
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
 
-      // 服务器不支持 Range，返回的是完整文件：丢弃已收部分重新累积
-      if (received > 0 && resp.status === 200) {
-        chunks.length = 0
-        received = 0
-      }
+      // 服务器不支持 Range 时会返回 200 + 完整文件。
+      // 此时不能清零重来（那样永远传不完），而是跳过已经收到的前缀字节，
+      // 只追加剩下的部分，这样即使每次都从头响应，进度也能持续推进。
+      let skip = received > 0 && resp.status === 200 ? received : 0
 
       const reader = resp.body?.getReader()
       if (!reader) {
         const buf = new Uint8Array(await resp.arrayBuffer())
-        chunks.push(buf)
-        received += buf.byteLength
+        const usable = skip > 0 ? buf.subarray(Math.min(skip, buf.byteLength)) : buf
+        chunks.push(usable)
+        received += usable.byteLength
         onBytes(received)
       } else {
         for (;;) {
           const { done, value } = await reader.read()
           if (done) break
-          if (value?.length) {
-            chunks.push(value)
-            received += value.length
-            onBytes(received)
-            resetIdle()
-            if (expectedSize !== null && received >= expectedSize) break
+          if (!value?.length) continue
+
+          let piece: Uint8Array = value
+          if (skip > 0) {
+            if (piece.length <= skip) {
+              skip -= piece.length
+              continue
+            }
+            piece = piece.subarray(skip)
+            skip = 0
           }
+
+          chunks.push(piece)
+          received += piece.length
+          onBytes(received)
+          resetIdle()
+          if (expectedSize !== null && received >= expectedSize) break
         }
       }
 
